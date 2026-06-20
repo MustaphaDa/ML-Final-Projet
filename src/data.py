@@ -43,11 +43,22 @@ DROP_COLUMNS = [
     "neighbourhood",
     "host_verifications",
     "host_has_profile_pic",
+    "host_neighbourhood",  # ~87% missing; neighbourhood_cleansed is enough
 ]
 
 TEXT_COLUMNS = ["name", "description", "neighborhood_overview", "host_about"]
 PERCENTAGE_COLUMNS = ["host_response_rate", "host_acceptance_rate"]
 BOOLEAN_COLUMNS = ["host_is_superhost", "host_identity_verified", "instant_bookable", "has_availability"]
+DATE_COLUMNS = ["host_since", "first_review", "last_review"]
+REVIEW_SCORE_COLUMNS = [
+    "review_scores_rating",
+    "review_scores_accuracy",
+    "review_scores_cleanliness",
+    "review_scores_checkin",
+    "review_scores_communication",
+    "review_scores_location",
+    "review_scores_value",
+]
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
@@ -103,6 +114,49 @@ def count_amenities(value) -> int:
     if pd.isna(value):
         return 0
     return len(re.findall(r'"[^"]+"', str(value)))
+
+
+def parse_bathrooms_text(series: pd.Series) -> pd.Series:
+    """Extract numeric bathroom count from strings like '1 bath' or '1.5 shared baths'."""
+    extracted = series.astype(str).str.extract(r"(\d+(?:\.\d+)?)", expand=False)
+    return pd.to_numeric(extracted, errors="coerce")
+
+
+def convert_dates(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    for col in columns:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+    return df
+
+
+def drop_bad_columns(df: pd.DataFrame, missing_threshold: float = 0.95) -> pd.DataFrame:
+    """Drop empty, constant, leaky, and very sparse columns."""
+    drop = set(DROP_COLUMNS + LEAKY_COLUMNS)
+
+    for col in df.columns:
+        missing_rate = df[col].isna().mean()
+        if missing_rate >= missing_threshold:
+            drop.add(col)
+        elif df[col].notna().any() and df[col].nunique(dropna=True) <= 1:
+            drop.add(col)
+
+    existing = [col for col in drop if col in df.columns]
+    return df.drop(columns=existing)
+
+
+def cleaning_report(df: pd.DataFrame) -> pd.DataFrame:
+    """Summarize column types and missing values after cleaning."""
+    rows = []
+    for col in df.columns:
+        rows.append(
+            {
+                "column": col,
+                "dtype": str(df[col].dtype),
+                "missing_pct": round(df[col].isna().mean() * 100, 1),
+                "unique": df[col].nunique(dropna=True),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("missing_pct", ascending=False)
 
 
 def remove_price_outliers(
@@ -166,14 +220,18 @@ def clean_listings(df: pd.DataFrame) -> pd.DataFrame:
     for col in BOOLEAN_COLUMNS:
         if col in cleaned.columns:
             cleaned[col] = clean_boolean(cleaned[col])
+    cleaned = convert_dates(cleaned, DATE_COLUMNS)
+
+    if "bathrooms_text" in cleaned.columns:
+        cleaned["bathrooms_count"] = parse_bathrooms_text(cleaned["bathrooms_text"])
     if "amenities" in cleaned.columns:
         cleaned["amenities_count"] = cleaned["amenities"].apply(count_amenities)
     for col in TEXT_COLUMNS:
         if col in cleaned.columns:
             cleaned[col] = cleaned[col].apply(strip_html).replace("", np.nan)
 
-    drop_cols = [col for col in LEAKY_COLUMNS + DROP_COLUMNS if col in cleaned.columns]
-    return cleaned.drop(columns=drop_cols).reset_index(drop=True)
+    cleaned = drop_bad_columns(cleaned)
+    return cleaned.reset_index(drop=True)
 
 
 def build_modeling_table(listings: pd.DataFrame, reviews: pd.DataFrame) -> pd.DataFrame:
@@ -181,6 +239,12 @@ def build_modeling_table(listings: pd.DataFrame, reviews: pd.DataFrame) -> pd.Da
     reviews_agg = aggregate_reviews(reviews)
     df = listings_clean.merge(reviews_agg, left_on="id", right_on="listing_id", how="left")
     df["review_count"] = df["review_count"].fillna(0).astype(int)
+    df["has_reviews"] = (df["review_count"] > 0).astype(int)
+
+    # Drop redundant merge key
+    if "listing_id" in df.columns:
+        df = df.drop(columns=["listing_id"])
+
     return df.reset_index(drop=True)
 
 
