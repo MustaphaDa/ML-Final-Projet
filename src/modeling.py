@@ -1,5 +1,8 @@
 """Feature preprocessing and regression metrics."""
 
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -60,3 +63,38 @@ def print_metrics(metrics: dict[str, float], label: str = "Model") -> None:
     print(f"{label} metrics:")
     for name, value in metrics.items():
         print(f"  {name}: {value:.4f}")
+
+
+def plot_regression_results(
+    y_test,
+    y_pred,
+    weights,
+    third_panel_title: str = "weight histogram",
+    target_label: str = "price",
+    save_path: Path | str | None = None,
+) -> None:
+    """Plot true vs predicted, residuals, and coefficient histogram."""
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+    print("MSE:", mse)
+    print("r^2:", r2)
+
+    fig, ax = plt.subplots(1, 3, figsize=(12, 3))
+
+    ax[0].scatter(y_test, y_pred, s=2, alpha=0.5)
+    ax[0].set_title("True vs. Predicted")
+    ax[0].set_xlabel(f"True {target_label}")
+    ax[0].set_ylabel(f"Predicted {target_label}")
+
+    error = np.squeeze(np.array(y_test)) - np.squeeze(np.array(y_pred))
+    ax[1].hist(error, bins=30)
+    ax[1].set_title("Raw residuals")
+    ax[1].set_xlabel("(true - predicted)")
+
+    ax[2].hist(np.asarray(weights).ravel(), bins=30)
+    ax[2].set_title(third_panel_title)
+
+    plt.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+    plt.show()

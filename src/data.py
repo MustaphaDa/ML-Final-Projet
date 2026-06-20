@@ -251,6 +251,22 @@ def build_modeling_table(listings: pd.DataFrame, reviews: pd.DataFrame) -> pd.Da
 def save_modeling_table() -> Path:
     """Load raw data, clean, merge, and write the processed CSV."""
     df = build_modeling_table(load_listings(), load_reviews())
+    PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
     output_path = PROCESSED_DATA_DIR / OUTPUT_FILE
-    df.to_csv(output_path, index=False)
-    return output_path
+    fallback_path = PROCESSED_DATA_DIR / "malaga_modeling_table_latest.csv"
+
+    for path in (output_path, fallback_path):
+        try:
+            df.to_csv(path, index=False)
+            if path != output_path:
+                print(
+                    f"Could not overwrite {output_path.name} (file may be open in Excel or the editor). "
+                    f"Saved to {path.name} instead."
+                )
+            return path
+        except PermissionError:
+            continue
+
+    raise PermissionError(
+        f"Cannot write processed data. Close {output_path.name} if it is open, then run again."
+    )
