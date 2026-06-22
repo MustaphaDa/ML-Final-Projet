@@ -48,7 +48,12 @@ DROP_COLUMNS = [
 
 TEXT_COLUMNS = ["name", "description", "neighborhood_overview", "host_about"]
 PERCENTAGE_COLUMNS = ["host_response_rate", "host_acceptance_rate"]
-BOOLEAN_COLUMNS = ["host_is_superhost", "host_identity_verified", "instant_bookable", "has_availability"]
+BOOLEAN_COLUMNS = [
+    "host_is_superhost",
+    "host_identity_verified",
+    "instant_bookable",
+    "has_availability",
+]
 DATE_COLUMNS = ["host_since", "first_review", "last_review"]
 REVIEW_SCORE_COLUMNS = [
     "review_scores_rating",
@@ -98,7 +103,16 @@ def clean_percentage(series: pd.Series) -> pd.Series:
 
 
 def clean_boolean(series: pd.Series) -> pd.Series:
-    mapping = {"t": 1, "f": 0, "true": 1, "false": 0, "1": 1, "0": 0, "1.0": 1, "0.0": 0}
+    mapping = {
+        "t": 1,
+        "f": 0,
+        "true": 1,
+        "false": 0,
+        "1": 1,
+        "0": 0,
+        "1.0": 1,
+        "0.0": 0,
+    }
     normalized = series.astype(str).str.strip().str.lower()
     return normalized.map(mapping)
 
@@ -176,9 +190,8 @@ def remove_price_outliers(
 
 
 def filter_coordinates(df: pd.DataFrame) -> pd.DataFrame:
-    mask = (
-        df["latitude"].between(LATITUDE_MIN, LATITUDE_MAX)
-        & df["longitude"].between(LONGITUDE_MIN, LONGITUDE_MAX)
+    mask = df["latitude"].between(LATITUDE_MIN, LATITUDE_MAX) & df["longitude"].between(
+        LONGITUDE_MIN, LONGITUDE_MAX
     )
     return df.loc[mask].copy()
 
@@ -189,7 +202,10 @@ def aggregate_reviews(reviews: pd.DataFrame) -> pd.DataFrame:
 
     agg_spec: dict = {"review_count": ("date", "count")}
     if "comments" in reviews.columns:
-        agg_spec["review_text"] = ("comments", lambda s: " ".join(s.dropna().astype(str)))
+        agg_spec["review_text"] = (
+            "comments",
+            lambda s: " ".join(s.dropna().astype(str)),
+        )
 
     grouped = reviews.groupby("listing_id").agg(**agg_spec).reset_index()
     date_stats = (
@@ -198,7 +214,9 @@ def aggregate_reviews(reviews: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     grouped = grouped.merge(date_stats, on="listing_id", how="left")
-    grouped["review_span_days"] = (grouped["last_review_date"] - grouped["first_review_date"]).dt.days
+    grouped["review_span_days"] = (
+        grouped["last_review_date"] - grouped["first_review_date"]
+    ).dt.days
 
     if "review_text" in grouped.columns:
         grouped["review_text_length"] = grouped["review_text"].str.len()
@@ -237,7 +255,9 @@ def clean_listings(df: pd.DataFrame) -> pd.DataFrame:
 def build_modeling_table(listings: pd.DataFrame, reviews: pd.DataFrame) -> pd.DataFrame:
     listings_clean = clean_listings(listings)
     reviews_agg = aggregate_reviews(reviews)
-    df = listings_clean.merge(reviews_agg, left_on="id", right_on="listing_id", how="left")
+    df = listings_clean.merge(
+        reviews_agg, left_on="id", right_on="listing_id", how="left"
+    )
     df["review_count"] = df["review_count"].fillna(0).astype(int)
     df["has_reviews"] = (df["review_count"] > 0).astype(int)
 
@@ -248,9 +268,73 @@ def build_modeling_table(listings: pd.DataFrame, reviews: pd.DataFrame) -> pd.Da
     return df.reset_index(drop=True)
 
 
+# =====================================================================
+# === SPATIAL FEATURE ENGINEERING                                   ===
+# =====================================================================
+
+# Malaga geographic coordinates and landmarks
+MALAGA_CENTER = (36.721071745393665, -4.422086495998684)  # Plaza de la Constitución
+
+# Extracted coordinates from the Malaga beach coastline map (latitude, longitude)
+BEACH_POINTS = np.array(
+    [
+        [36.692789153127954, -4.440228665971509],  # Misericordia Beach (West)
+        [36.70241003211757, -4.433250476269645],  # Huelin Beach
+        [36.717253695523326, -4.410496252052286],  # Malagueta Beach (1)
+        [36.72005173741972, -4.402729784919005],  # Malagueta Beach (2)
+        [36.722703020692414, -4.392852249502834],  # Malagueta Beach (3)
+        [36.72141890197016, -4.38255262299423],  # Pedregalejo Beach
+        [36.71866654638932, -4.360032646495201],  # El Palo Beach (East)
+    ]
+)
+
+
+def add_spatial_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate distance to the historic center and the closest beach point using Haversine formula."""
+    R = 6371.0  # Earth's radius in kilometers
+
+    # 1. DISTANCE TO HISTORIC CENTER
+    lat1, lon1 = np.radians(MALAGA_CENTER[0]), np.radians(MALAGA_CENTER[1])
+    lat2, lon2 = np.radians(df["latitude"]), np.radians(df["longitude"])
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    df["distance_to_center"] = R * c
+
+    # 2. DISTANCE TO NEAREST BEACH POINT
+    def calculate_minimum_beach_distance(row):
+        property_lat, property_lon = np.radians(row["latitude"]), np.radians(
+            row["longitude"]
+        )
+        beach_lat = np.radians(BEACH_POINTS[:, 0])
+        beach_lon = np.radians(BEACH_POINTS[:, 1])
+
+        dlat_p = beach_lat - property_lat
+        dlon_p = beach_lon - property_lon
+        a_p = (
+            np.sin(dlat_p / 2) ** 2
+            + np.cos(property_lat) * np.cos(beach_lat) * np.sin(dlon_p / 2) ** 2
+        )
+        c_p = 2 * np.arctan2(np.sqrt(a_p), np.sqrt(1 - a_p))
+        return np.min(R * c_p)
+
+    df["distance_to_beach"] = df.apply(calculate_minimum_beach_distance, axis=1)
+
+    return df
+
+
+# =====================================================================
+
+
 def save_modeling_table() -> Path:
     """Load raw data, clean, merge, and write the processed CSV."""
     df = build_modeling_table(load_listings(), load_reviews())
+
+    # Apply the spatial feature engineering process
+    df = add_spatial_features(df)
+
     PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
     output_path = PROCESSED_DATA_DIR / OUTPUT_FILE
     fallback_path = PROCESSED_DATA_DIR / "malaga_modeling_table_latest.csv"
