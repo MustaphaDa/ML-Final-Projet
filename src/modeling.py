@@ -65,6 +65,15 @@ def print_metrics(metrics: dict[str, float], label: str = "Model") -> None:
         print(f"  {name}: {value:.4f}")
 
 
+def blend_predictions(
+    y_pred_a: np.ndarray,
+    y_pred_b: np.ndarray,
+    weight_a: float = 0.7,
+) -> np.ndarray:
+    """Late-fusion blend: weight_a * pred_a + (1 - weight_a) * pred_b."""
+    return weight_a * np.asarray(y_pred_a) + (1.0 - weight_a) * np.asarray(y_pred_b)
+
+
 def plot_regression_results(
     y_test,
     y_pred,
