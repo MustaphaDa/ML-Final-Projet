@@ -8,7 +8,7 @@ ipykernel>=6.0
 tqdm>=4.65
 
 # Optional — uncomment as you need them
-# xgboost>=2.0
+xgboost>=2.0
 # lightgbm>=4.0
 # torch>=2.0
 # transformers>=4.30
