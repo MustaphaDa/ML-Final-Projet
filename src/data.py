@@ -89,10 +89,8 @@ def load_calendar() -> pd.DataFrame | None:
 
 
 def clean_price(series: pd.Series) -> pd.Series:
-    if series.dtype == object:
-        cleaned = series.astype(str).str.replace(r"[\$€,]", "", regex=True).str.strip()
-        return pd.to_numeric(cleaned, errors="coerce")
-    return pd.to_numeric(series, errors="coerce")
+    cleaned = series.astype(str).str.replace(r"[\$€,]", "", regex=True).str.strip()
+    return pd.to_numeric(cleaned, errors="coerce")
 
 
 def clean_percentage(series: pd.Series) -> pd.Series:
